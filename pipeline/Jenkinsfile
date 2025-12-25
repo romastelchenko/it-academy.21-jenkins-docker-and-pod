@@ -1,0 +1,72 @@
+pipeline {
+    agent any
+    stages {
+        stage('Clone repository') {
+            steps {
+              dir('repo') {
+                git url: 'http://jenkins-by-argo.k8s-13.sa/job/21-jenkins-docker-and-pod-job/', branch: 'master'
+              }
+	    }
+        }
+        stage('Checking repository'){
+            steps {
+                sh "ls -l"
+            }
+        }
+        stage('Validate Dockerfile') {
+            steps {
+                sh """
+		echo "Validate Dockerfile"
+                """
+            }
+        }
+        stage('Build image') {
+            steps {
+                sh """
+                echo "Build image"
+                """
+            }
+        }
+        stage('Run and test image') {
+            steps {
+                sh """
+                echo "Run and test image"
+                """
+            }
+        }
+
+        stage('Push image to the registry') {
+            steps {
+                sh """
+                echo "Push image to the registry"
+                """
+            }
+        }
+
+        stage('Aprove deploy') {
+            steps {
+		script {
+			timeout(time: 30, unit: 'MINUTES') {
+				input message: 'Deploy to pre-prod?', ok: 'Deploy'
+				submitter: 'admin'	
+			}
+		}
+            }
+        }
+        stage('Deploy to pre-prod') {
+            steps {
+                sh """
+                echo "Deploy to pre-prod"
+                """
+            }
+        }
+        stage('Test pre-prod') {
+            steps {
+                sh """
+                echo "Test pre-prod"
+                """
+            }
+        }
+
+    }
+}
