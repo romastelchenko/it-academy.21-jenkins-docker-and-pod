@@ -1,19 +1,19 @@
 def slack_notify(String message){
-    def notify_head = "*${env.BUILD_URL}*\n*Jenkins job:* ${env.JOB_NAME}, *Build:* #${env.BUILD_NUMBER}\n"
+    def notify_head = "----------------------\n${env.BUILD_URL}\n*Jenkins job:* ${env.JOB_NAME}\n*Build:* #${env.BUILD_NUMBER}\n"
     def notify_message = notify_head + message
     slackSend(channel: '#itacademy-notifications', message: notify_message)
 }
 
 def deploy_to_env(String env_name, String image, String add_message) {
 	stage("Deploy to ${env_name}") {
-		def message="Confirmation of image ${image} deployment for environment ${env_name} is required. \nIf confirmation is not received within 30 minutes, the deployment will be rejected. \n"
+		def message="Сonfirmation of deployment is required. \nImage: ${image}. \nEnvironment: ${env_name}. \n Confirmation timeout: 30min. \n"
 		message+=add_message
 
 		slack_notify(message)
 		
 		timeout(time: 30, unit: 'MINUTES') {
-		        input message: message, ok: 'Deploy'
-		        submitter: 'admin'      
+	        input message: message, ok: 'Deploy'
+	        submitter: 'admin'      
 		}
 
 		echo "Deploying ${image} to ${env_name}"
@@ -140,8 +140,15 @@ pipeline {
     	    steps {
                 script {
                     def pre_prod_status = deploy_to_env("${env.PRE_PROD_NS}", "${env.APP_IMAGE}", "")
-                    def prod_status =deploy_to_env("${env.PROD_NS}", "${env.APP_IMAGE}", "Status of pre-prod deployment: ${pre_prod_status}")
-                    echo "Status of pre-prod deployment: ${prod_status}"
+                    def pre_prod_status_message="Tests status in pre-prod: ${pre_prod_status}"
+                    echo pre_prod_status_message
+                    add_slack_message="${pre_prod_status_message}"
+
+                    def prod_status =deploy_to_env("${env.PROD_NS}", "${env.APP_IMAGE}", pre_prod_status_message)
+                    def prod_status_message="Tests status prod: ${pre_prod_status}"
+                    echo prod_status_message
+                    add_slack_message+="\n${prod_status_message}"
+
                     remove_deployment("${env.PRE_PROD_NS}", "${env.APP_IMAGE}")
 
         		}
@@ -158,7 +165,10 @@ pipeline {
                 ]
                 def status = currentBuild.currentResult ?: 'UNKNOWN'
                 def emoji  = status_emoji.get(status, ':large_yellow_circle:')
-                def notify_message = "*Action:* Build and deployment of image ${env.APP_IMAGE} to the PROD environment\n*Status:* ${emoji} ${status}"
+                def notify_message = "*Action:* Build and deployment of image ${env.APP_IMAGE} to the PROD environment\n*Build status:* ${emoji} ${status}"
+                if (add_slack_message) {
+                    notify_message+="\n${add_slack_message}"
+                }
                 slack_notify(notify_message)
             }
         }
