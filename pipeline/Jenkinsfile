@@ -4,7 +4,7 @@ pipeline {
         stage('Clone repository') {
             steps {
               dir('repo') {
-                git url: 'https://github.com/romastelchenko/it-academy.21-jenkins-docker-and-pod.git', branch: 'master'
+                git url: 'https://github.com/romastelchenko/it-academy.21-jenkins-docker-and-pod.git', branch: 'main'
               }
 	    }
         }
