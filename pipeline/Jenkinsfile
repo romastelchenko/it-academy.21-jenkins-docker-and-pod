@@ -55,7 +55,13 @@ pipeline {
         }
         stage('Deploy to pre-prod') {
             steps {
-                sh """
+		sh """
+		IMAGE="ghcr.io/romastelchenko/get-time-app:12-24-25"
+		NAMESPACE="pre-prod"
+		export IMAGE="$IMAGE"
+		kubectl create namespace "$NAMESPACE" 2>/dev/null || true
+		envsubst < kubernetes/app.yaml | kubectl apply -n "$NAMESPACE" -f -
+
                 echo "Deploy to pre-prod"
                 """
             }
