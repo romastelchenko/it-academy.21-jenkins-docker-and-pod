@@ -17,40 +17,51 @@ def deploy_to_env(String env_name, String image, String add_message) {
 		}
 
 		echo "Deploying ${image} to ${env_name}"
-        sh '''
-        export APP_IMAGE="${registry}/${image_name}"
+        sh """
+        export APP_IMAGE="${image}"
+        export ENV_NAME="${env_name}"
         kubectl create namespace "${env_name}" 2>/dev/null || true
         envsubst < kubernetes_deploy/app.yaml | kubectl apply -n "${env_name}" -f -
-        echo "Deploy to pre-prod"
-        '''
+        """
 	}
-
-    stage("Test after deployment to ${env_name}") {
-        test_app("http://get-time-app.k8s-13.sa")
+    
+    try {
+        stage("Test after deployment to ${env_name}") {
+            test_app("http://get-time-app-${env_name}.k8s-13.sa")
+        } 
+    } catch (e) {
+        return 'TESTS_FAILED'
     }
-	return 'success'
+    
+	return 'SUCCESS'
 }
 
-def remove_deploy(String env_name, String image) {
+def remove_deployment(String env_name, String image) {
     stage("Remove deployment from ${env_name}") {
-        echo "Remove deployment from ${env_name}"
+        echo "Remove ${image} deployment from ${env_name}"
+        sh """
+        export APP_IMAGE="${image}"
+        kubectl create namespace "${env_name}" 2>/dev/null || true
+        envsubst < kubernetes_deploy/app.yaml | kubectl delete -n "${env_name}" -f -
+        """
     }
 }
 
 def test_app(String url) {
     sh """
-     echo "Check if docker application available"
-     URL="${url}/time?tz=America/New_York"
-     for ((i = 0 ; i < 10 ; i++ )); do
-       echo "Attempt $i: "
-       if curl -fsS --max-time 10 -o app-rs.json "$URL"; then
-         echo "Service is available, rs:"
-         cat app-rs.json
-         exit 0
-       fi
-       sleep $i
-     done
-     echo "Service is not available"
+    echo "Check if docker application available"
+    URL="${url}/time?tz=America/New_York"
+    for i in \$(seq 0 9); do
+        echo "Attempt \$i: "
+        if curl -fsS --max-time 10 -o app-rs.json "\$URL"; then
+            echo "Service is available, response:"
+            cat app-rs.json
+            exit 0
+        fi
+        sleep "\$i"
+    done
+    echo "Service is not available"
+    exit 1
     """
 }
 
@@ -58,8 +69,11 @@ def test_app(String url) {
 pipeline {
     environment {
         BASE_IMAGE_NAME = 'get-time-app'
+        REGISTRY_HOST = 'https://ghcr.io/'
         REGISTRY_URL = 'ghcr.io/romastelchenko'
         REGISTRY_CREDENTIALS = 'github_registry'
+        PROD_NS = 'prod'
+        PRE_PROD_NS = 'pre-prod'
     }
     agent { label 'docker && k8s' }
     stages {
@@ -85,7 +99,7 @@ pipeline {
             steps {
                 sh """
                 echo "Started Dockerfile validation:"
-		        docker run --rm -i hadolint/hadolint < docker_app/Dockerfile
+                docker run --rm -i hadolint/hadolint hadolint --failure-threshold error - < docker_app/Dockerfile
                 """
             }
         }
@@ -94,7 +108,7 @@ pipeline {
             steps {
                 dir('docker_app'){
                     script {
-                        docker_image = docker.build "${registry_url}/${image_name}" , "."
+                        docker_image = docker.build "${env.APP_IMAGE}" , "."
                     }
                 }
             }
@@ -115,8 +129,8 @@ pipeline {
         stage('Push image to the registry') {
             steps {
         		script {
-                    docker.withRegistry(registry_url, registry_credentials) {
-                        dockerImage.push()
+                    docker.withRegistry("${env.REGISTRY_HOST}", "${env.REGISTRY_CREDENTIALS}") {
+                        docker_image.push()
                     }
         		}          
             }
@@ -125,12 +139,11 @@ pipeline {
     	stage('Deploys') {
     	    steps {
                 script {
-    		       def pre_prod_status = deployToEnv('pre-prod', ${env.BASE_IMAGE_NAME}, '')
-    		       
-                   if (pre_prod_status == 'success' ) {
-    		            deploy_to_env('prod', ${env.BASE_IMAGE_NAME},  'Status of pre-prod deployment: ' + pre_prod_status)
-    		       }
-    		       remove_deploy('pre-prod', ${env.BASE_IMAGE_NAME})
+                    def pre_prod_status = deploy_to_env("${env.PRE_PROD_NS}", "${env.APP_IMAGE}", "")
+                    def prod_status =deploy_to_env("${env.PROD_NS}", "${env.APP_IMAGE}", "Status of pre-prod deployment: ${pre_prod_status}")
+                    echo "Status of pre-prod deployment: ${prod_status}"
+                    remove_deployment("${env.PRE_PROD_NS}", "${env.APP_IMAGE}")
+
         		}
             }
         }
@@ -140,12 +153,12 @@ pipeline {
         always {
             script {
                 def status_emoji = [
-                  'SUCCESS' : ':large_green_circle:',
-                  'FAILURE' : ':red_circle:'
+                    'SUCCESS' : ':large_green_circle:',
+                    'FAILURE' : ':red_circle:'
                 ]
                 def status = currentBuild.currentResult ?: 'UNKNOWN'
                 def emoji  = status_emoji.get(status, ':large_yellow_circle:')
-                def notify_message = "*Status:* ${emoji} ${status}"
+                def notify_message = "*Action:* Build and deployment of image ${env.APP_IMAGE} to the PROD environment\n*Status:* ${emoji} ${status}"
                 slack_notify(notify_message)
             }
         }

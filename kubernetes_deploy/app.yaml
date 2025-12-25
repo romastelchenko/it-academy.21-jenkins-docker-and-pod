@@ -48,7 +48,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: get-time-app.k8s-13.sa
+    - host: get-time-app-${ENV_NAME}.k8s-13.sa
       http:
         paths:
           - path: /
