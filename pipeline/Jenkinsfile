@@ -1,5 +1,28 @@
-def deployToEnv(String envName, String image) {
-    echo "Deploying ${image} to ${envName}"
+def slackNotify(String message){
+	def notify_head = "*Jenkins job:* ${env.JOB_NAME}, *Build:* #${env.BUILD_NUMBER}\n"
+	def notify_message = notify_head + message
+        slackSend(channel: '#itacademy-notifications', message: notify_message)
+}
+
+def deployToEnv(String envName, String image, String addMessageInfo) {
+	stage("Deploy to ${envName}") {
+		def message="Confirmation of image ${image} deployment for environment ${envName} is required.\nIf confirmation is not received within 30 minutes, the deployment will be rejected\n"
+		message+=addMessageInfo
+
+		slackNotify(message)
+		
+		timeout(time: 30, unit: 'MINUTES') {
+		        input message: message, ok: 'Deploy'
+		        submitter: 'admin'      
+		}
+
+		echo "Deploying ${image} to ${envName}"
+	}
+        stage("Test after deployment to ${envName}") {
+                echo "Test"
+        }
+
+	return success
 }
 
 pipeline {
@@ -47,43 +70,29 @@ pipeline {
             }
         }
 
-        stage('Aprove deploy') {
-            steps {
-		script {
-			timeout(time: 30, unit: 'MINUTES') {
-				input message: 'Deploy to pre-prod?', ok: 'Deploy'
-				submitter: 'admin'	
-			}
-		}
-            }
-        }
-        stage('Deploy to pre-prod') {
-            steps {
-		sh '''
-		APP_IMAGE="ghcr.io/romastelchenko/get-time-app:12-24-25"
-		NAMESPACE="pre-prod"
-		export APP_IMAGE="${APP_IMAGE}"
-		kubectl create namespace "${NAMESPACE}" 2>/dev/null || true
-		envsubst < kubernetes/app.yaml | kubectl apply -n "${NAMESPACE}" -f -
-
-                echo "Deploy to pre-prod"
-                '''
-            }
-        }
-        stage('Test pre-prod') {
-            steps {
-                sh """
-                echo "Test pre-prod"
-                """
+	stage('Deploys') {
+	    steps {
+               def preProdStatus = deployToEnv('pre-prod',   "2")
+	       if (preProdStatus == 'success' ) {
+                    deployToEnv('prod', "image")
+               }
+	       removeDeploy('pre-prod', "image")
             }
         }
 
-        stage('Deploys fun') {
-            steps {
-                deployToEnv('pre-prod', "1")
-                deployToEnv('prod',     "2")
-            }
+    }
+    post {
+        always {
+          script {
+            def status_emoji = [
+              'SUCCESS' : ':large_green_circle:',
+              'FAILURE' : ':red_circle:'
+            ]
+            def status = currentBuild.currentResult ?: 'UNKNOWN'
+            def emoji  = status_emoji.get(status, ':large_yellow_circle:')
+            def notify_message = "*Status:* ${emoji} ${status}"
+	    slackNotify(notify_message)
+          }
         }
-
     }
 }
