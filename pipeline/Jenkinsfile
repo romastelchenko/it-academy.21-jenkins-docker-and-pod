@@ -27,7 +27,7 @@ def deploy_to_env(String env_name, String image, String add_message) {
     
     try {
         stage("Test after deployment to ${env_name}") {
-            test_app("http://get-time-app-${env_name}-p.k8s-13.sa")
+            test_app("http://get-time-app-${env_name}.k8s-13.sa")
         } 
     } catch (e) {
         return 'TESTS_FAILED'
