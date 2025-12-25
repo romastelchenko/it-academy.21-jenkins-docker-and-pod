@@ -1,98 +1,153 @@
-def slackNotify(String message){
-	def notify_head = "*Jenkins job:* ${env.JOB_NAME}, *Build:* #${env.BUILD_NUMBER}\n"
-	def notify_message = notify_head + message
-        slackSend(channel: '#itacademy-notifications', message: notify_message)
+def slack_notify(String message){
+    def notify_head = "*${env.BUILD_URL}*\n*Jenkins job:* ${env.JOB_NAME}, *Build:* #${env.BUILD_NUMBER}\n"
+    def notify_message = notify_head + message
+    slackSend(channel: '#itacademy-notifications', message: notify_message)
 }
 
-def deployToEnv(String envName, String image, String addMessageInfo) {
-	stage("Deploy to ${envName}") {
-		def message="Confirmation of image ${image} deployment for environment ${envName} is required.\nIf confirmation is not received within 30 minutes, the deployment will be rejected\n"
-		message+=addMessageInfo
+def deploy_to_env(String env_name, String image, String add_message) {
+	stage("Deploy to ${env_name}") {
+		def message="Confirmation of image ${image} deployment for environment ${env_name} is required. \nIf confirmation is not received within 30 minutes, the deployment will be rejected. \n"
+		message+=add_message
 
-		slackNotify(message)
+		slack_notify(message)
 		
 		timeout(time: 30, unit: 'MINUTES') {
 		        input message: message, ok: 'Deploy'
 		        submitter: 'admin'      
 		}
 
-		echo "Deploying ${image} to ${envName}"
+		echo "Deploying ${image} to ${env_name}"
+        sh '''
+        export APP_IMAGE="${registry}/${image_name}"
+        kubectl create namespace "${env_name}" 2>/dev/null || true
+        envsubst < kubernetes_deploy/app.yaml | kubectl apply -n "${env_name}" -f -
+        echo "Deploy to pre-prod"
+        '''
 	}
-        stage("Test after deployment to ${envName}") {
-                echo "Test"
-        }
 
-	return success
+    stage("Test after deployment to ${env_name}") {
+        test_app("http://get-time-app.k8s-13.sa")
+    }
+	return 'success'
 }
 
+def remove_deploy(String env_name, String image) {
+    stage("Remove deployment from ${env_name}") {
+        echo "Remove deployment from ${env_name}"
+    }
+}
+
+def test_app(String url) {
+    sh """
+     echo "Check if docker application available"
+     URL="${url}/time?tz=America/New_York"
+     for ((i = 0 ; i < 10 ; i++ )); do
+       echo "Attempt $i: "
+       if curl -fsS --max-time 10 -o app-rs.json "$URL"; then
+         echo "Service is available, rs:"
+         cat app-rs.json
+         exit 0
+       fi
+       sleep $i
+     done
+     echo "Service is not available"
+    """
+}
+
+
 pipeline {
+    environment {
+        BASE_IMAGE_NAME = 'get-time-app'
+        REGISTRY_URL = 'ghcr.io/romastelchenko'
+        REGISTRY_CREDENTIALS = 'github_registry'
+    }
     agent { label 'docker && k8s' }
     stages {
         stage('Clone repository') {
             steps {
-              dir('repo') {
-                git url: 'https://github.com/romastelchenko/it-academy.21-jenkins-docker-and-pod.git', branch: 'main'
-              }
-	    }
+                dir('repo') {
+                    git url: 'https://github.com/romastelchenko/it-academy.21-jenkins-docker-and-pod.git', branch: 'main'
+                }
+    	    }
         }
-        stage('Checking repository'){
+
+        stage('Init image name'){
             steps {
-                sh "ls -l"
+                script {
+                    def image_tag = sh(script: 'date +%m-%d-%y', returnStdout: true).trim()
+                    env.APP_IMAGE = "${env.REGISTRY_URL}/${env.BASE_IMAGE_NAME}:${image_tag}"
+                    echo "Image name will be: ${env.APP_IMAGE}"
+                }
             }
         }
+
         stage('Validate Dockerfile') {
             steps {
                 sh """
-		echo "Validate Dockerfile"
+                echo "Started Dockerfile validation:"
+		        docker run --rm -i hadolint/hadolint < docker_app/Dockerfile
                 """
             }
         }
+
         stage('Build image') {
             steps {
-                sh """
-                echo "Build image"
-                """
+                dir('docker_app'){
+                    script {
+                        docker_image = docker.build "${registry_url}/${image_name}" , "."
+                    }
+                }
             }
         }
+
         stage('Run and test image') {
             steps {
-                sh """
-                echo "Run and test image"
-                """
+                script {
+                    echo "Run container"
+                    def container = docker_image.run('-p 2222:2222')
+                    test_app('http://localhost:2222')
+                    echo "Stop container"
+                    container.stop()
+                }
             }
         }
 
         stage('Push image to the registry') {
             steps {
-                sh """
-                echo "Push image to the registry"
-                """
+        		script {
+                    docker.withRegistry(registry_url, registry_credentials) {
+                        dockerImage.push()
+                    }
+        		}          
             }
         }
 
-	stage('Deploys') {
-	    steps {
-               def preProdStatus = deployToEnv('pre-prod',   "2")
-	       if (preProdStatus == 'success' ) {
-                    deployToEnv('prod', "image")
-               }
-	       removeDeploy('pre-prod', "image")
+    	stage('Deploys') {
+    	    steps {
+                script {
+    		       def pre_prod_status = deployToEnv('pre-prod', ${env.BASE_IMAGE_NAME}, '')
+    		       
+                   if (pre_prod_status == 'success' ) {
+    		            deploy_to_env('prod', ${env.BASE_IMAGE_NAME},  'Status of pre-prod deployment: ' + pre_prod_status)
+    		       }
+    		       remove_deploy('pre-prod', ${env.BASE_IMAGE_NAME})
+        		}
             }
         }
-
     }
+
     post {
         always {
-          script {
-            def status_emoji = [
-              'SUCCESS' : ':large_green_circle:',
-              'FAILURE' : ':red_circle:'
-            ]
-            def status = currentBuild.currentResult ?: 'UNKNOWN'
-            def emoji  = status_emoji.get(status, ':large_yellow_circle:')
-            def notify_message = "*Status:* ${emoji} ${status}"
-	    slackNotify(notify_message)
-          }
+            script {
+                def status_emoji = [
+                  'SUCCESS' : ':large_green_circle:',
+                  'FAILURE' : ':red_circle:'
+                ]
+                def status = currentBuild.currentResult ?: 'UNKNOWN'
+                def emoji  = status_emoji.get(status, ':large_yellow_circle:')
+                def notify_message = "*Status:* ${emoji} ${status}"
+                slack_notify(notify_message)
+            }
         }
     }
 }
