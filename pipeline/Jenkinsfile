@@ -1,3 +1,7 @@
+def deployToEnv(String envName, String image) {
+    echo "Deploying ${image} to ${envName}"
+}
+
 pipeline {
     agent { label 'docker && k8s' }
     stages {
@@ -55,7 +59,7 @@ pipeline {
         }
         stage('Deploy to pre-prod') {
             steps {
-		sh """
+		sh '''
 		APP_IMAGE="ghcr.io/romastelchenko/get-time-app:12-24-25"
 		NAMESPACE="pre-prod"
 		export APP_IMAGE="${APP_IMAGE}"
@@ -63,7 +67,7 @@ pipeline {
 		envsubst < kubernetes/app.yaml | kubectl apply -n "${NAMESPACE}" -f -
 
                 echo "Deploy to pre-prod"
-                """
+                '''
             }
         }
         stage('Test pre-prod') {
@@ -71,6 +75,13 @@ pipeline {
                 sh """
                 echo "Test pre-prod"
                 """
+            }
+        }
+
+        stage('Deploys fun') {
+            steps {
+                deployToEnv('pre-prod', "1")
+                deployToEnv('prod',     "2")
             }
         }
 
