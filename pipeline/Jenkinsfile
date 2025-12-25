@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+    agent { label 'docker && k8s' }
     stages {
         stage('Clone repository') {
             steps {
@@ -56,11 +56,11 @@ pipeline {
         stage('Deploy to pre-prod') {
             steps {
 		sh """
-		IMAGE="ghcr.io/romastelchenko/get-time-app:12-24-25"
+		APP_IMAGE="ghcr.io/romastelchenko/get-time-app:12-24-25"
 		NAMESPACE="pre-prod"
-		export IMAGE="$IMAGE"
-		kubectl create namespace "$NAMESPACE" 2>/dev/null || true
-		envsubst < kubernetes/app.yaml | kubectl apply -n "$NAMESPACE" -f -
+		export APP_IMAGE="${APP_IMAGE}"
+		kubectl create namespace "${NAMESPACE}" 2>/dev/null || true
+		envsubst < kubernetes/app.yaml | kubectl apply -n "${NAMESPACE}" -f -
 
                 echo "Deploy to pre-prod"
                 """
